@@ -1,0 +1,145 @@
+---
+title: "Introdução ao comprasgovbr"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introdução ao comprasgovbr}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+```{r setup}
+library(comprasgovbr)
+```
+
+O pacote **comprasgovbr** dá acesso, direto de R, aos dados abertos das
+compras públicas federais divulgados pelo Compras.gov.br em
+<https://dadosabertos.compras.gov.br>. Todas as funções devolvem um
+`data.table` pronto para análise e percorrem as páginas da API
+automaticamente.
+
+## A tabela de metadados
+
+A API tem mais de 70 endpoints `GET` distribuídos em 15 módulos. O pacote
+inclui uma tabela hierárquica que documenta tudo isso — tag (tema), módulo,
+endpoint, operação e cada parâmetro de consulta:
+
+```{r}
+# Estrutura da tabela
+str(metadados)
+
+# Endpoints de um módulo
+compras_metadados(modulo = "modulo-contratos")
+
+# Parâmetros obrigatórios de um endpoint específico
+compras_metadados(caminho = "modulo-contratacoes/1_consultarContratacoes_PNCP_14133",
+                  obrigatorio = TRUE)
+
+# Buscar endpoints por palavra-chave no resumo
+compras_metadados(sumario = "fornecedor")
+```
+
+## Catálogos: a hierarquia de materiais e serviços
+
+O catálogo de materiais (CATMAT) é hierárquico:
+**Grupo > Classe > PDM > Item**. Cada nível tem uma função:
+
+```{r}
+grupos <- material_grupo()                     # 79 grupos
+classes <- material_classe(codigo_grupo = 71)  # mobiliário
+pdms <- material_pdm(codigo_classe = 7110)     # mobiliário para escritório
+itens <- material_item(codigo_pdm = 313)
+```
+
+O endpoint de itens já devolve a hierarquia completa desnormalizada, então
+uma única chamada basta para montar a visão hierárquica:
+
+```{r}
+itens <- material_item(codigo_grupo = 71)
+itens[, .N, by = .(nomeGrupo, nomeClasse, nomePdm)]
+```
+
+O catálogo de serviços segue a mesma lógica, com
+`servico_secao()`, `servico_divisao()`, `servico_grupo()`, `servico_classe()`,
+`servico_subclasse()` e `servico_item()`.
+
+## Módulos de compras
+
+Os demais módulos seguem o ciclo de vida da compra pública:
+
+```{r}
+# Pesquisa de preços praticados (agregado por PDM)
+precos <- precos_material(
+  tipo = "codigoPdm", codigo = "313",
+  data_compra_inicio = "2024-01-01", data_compra_fim = "2024-12-31"
+)
+
+# Licitações (módulo legado do Compras.net)
+lic <- licitacoes(
+  data_publicacao_inicial = "2024-01-01",
+  data_publicacao_final = "2024-01-31"
+)
+
+# Contratações da Lei 14.133 (PNCP), por modalidade (6 = dispensa)
+ctr <- contratacoes(
+  codigo_modalidade = 6,
+  data_publicacao_pncp_inicial = "2024-01-01",
+  data_publicacao_pncp_final = "2024-01-31"
+)
+
+# Contratos de um órgão, com janela de vigência de até 1 ano
+ct <- contratos(
+  codigo_orgao = 26237,
+  data_vigencia_inicial_min = "2024-01-01",
+  data_vigencia_inicial_max = "2024-12-31"
+)
+
+# Fornecedores por CNPJ
+forn <- fornecedores(cnpj = "00000000000191")
+```
+
+## Consulta genérica
+
+Qualquer endpoint `GET` da API pode ser consultado com `compras_consultar()`,
+usando os nomes de parâmetros da própria API (camelCase). O pacote valida o
+caminho e os parâmetros obrigatórios com base nos metadados:
+
+```{r}
+compras_consultar("modulo-material/1_consultarGrupoMaterial")
+
+compras_consultar("modulo-uasg/1_consultarUasg",
+                  siglaUf = "DF", statusUasg = TRUE)
+```
+
+Alguns endpoints possuem variantes `_CSV`, que devolvem arquivos delimitados
+por `";"` (decimal `","`, colunas em snake_case):
+
+```{r}
+uasgs_df <- compras_consultar("modulo-uasg/1_consultarUasg",
+                              siglaUf = "DF", csv = TRUE)
+```
+
+## Paginação e detalhes de funcionamento
+
+- A API devolve no máximo 500 registros por página (mínimo 10). O pacote
+  percorre todas as páginas automaticamente; use `paginar = FALSE` para uma
+  página única e `tamanho_pagina` para ajustar o tamanho.
+- Erros de conexão viram `warning` e a função devolve `NULL` invisível —
+  mesmo comportamento do pacote [`sidra`](https://github.com/rodrigoesborges/sidra).
+- Alguns endpoints limitam a janela de datas (contratos: no máximo 365 dias;
+  OCDS: no máximo 1 mês).
+- Datas (`Date`) e valores lógicos são normalizados automaticamente para os
+  formatos que a API espera (`YYYY-MM-DD`, `true`/`false`).
+
+## Limitações
+
+- Somente endpoints `GET` (sem autenticação); endpoints de escrita,
+  internos e de autenticação não são suportados.
+- O módulo OCDS requer janelas de até 1 mês.
